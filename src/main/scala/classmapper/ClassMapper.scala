@@ -1,37 +1,41 @@
 package classmapper
 
 import java.io.File
-import java.net.{URL, URLClassLoader, URI}
+import java.net.URLClassLoader
 import java.nio.file.{Files, Paths}
 import java.text.SimpleDateFormat
-import java.util.{Collections, Date}
+import java.util.Date
 
 import com.typesafe.config._
 
 import scala.annotation.tailrec
 import scala.collection.JavaConverters._
+import scala.util.{Success, Try}
+
 case class ClassMapperSettings(configName:String, mappingConfig:Config, superclassName:String,
-                               classmappingKey:String, storedMapping:Map[String, Int], counter:Int)
+                               classmappingKey:String, storedMapping:Map[String, Int], counter:Int, dir:File)
 object ClassMapperSettings {
-  def load(path:String, mapperName:String):ClassMapperSettings = load(new File(path), mapperName)
-  def load(directory:File, mapperName:String):ClassMapperSettings = {
+  def load(path:String, mapperName:String):Try[ClassMapperSettings] = load(new File(path), mapperName)
+  def load(directory:File, mapperName:String):Try[ClassMapperSettings] = {
     val configName = s"$mapperName.conf"
-    val cfg = ConfigFactory.parseFile(new File(directory, configName)).resolve()
     val superclassKey = s"$mapperName.interface"
-    val superclassName = cfg.getString(superclassKey)
     val classmappingKey = s"$mapperName.classmapping"
-    val mapping = ConfigFactory.parseString(cfg.getList(classmappingKey).get(0).render())
-    val storedMapping = configToMap(mapping)
-    ClassMapperSettings(configName, cfg, superclassName, classmappingKey, storedMapping, storedMapping.values.max + 1)
+
+    Try {
+      val cfg = ConfigFactory.parseFile(new File(directory, configName)).resolve()
+      val superclassName = cfg.getString(superclassKey)
+      val mapping = ConfigFactory.parseString(cfg.getList(classmappingKey).get(0).render())
+      val storedMapping = configToMap(mapping)
+      ClassMapperSettings(configName, cfg, superclassName, classmappingKey, storedMapping, storedMapping.values.max + 1, directory)
+    }
   }
   def configToMap(c:Config) = c.root().unwrapped().asScala.toMap.mapValues(v => v.toString.toInt)
 }
-class ClassMapper(mapperName:String) {
-  lazy val settings = ClassMapperSettings.load("", "")
+class ClassMapper {
   val renderOpts = ConfigRenderOptions.defaults().setOriginComments(false)
 
-  def updateMapping(path:File, cms:ClassMapperSettings):Map[String, Int] = {
-    val actualClassNames = findMappableClassNames(path, cms.superclassName)
+  def updateMapping(cms:ClassMapperSettings):Map[String, Int] = {
+    val actualClassNames = findMappableClassNames(cms.dir, cms.superclassName)
     val storedClassNames = cms.storedMapping.keySet
     val newClassNames = actualClassNames.diff(storedClassNames)
     val newClassNamesMapping = newClassNames.zipWithIndex.map { case (clazz, index) => (clazz, index + cms.counter)}.toMap
@@ -40,36 +44,29 @@ class ClassMapper(mapperName:String) {
     oldMapping ++ newClassNamesMapping
   }
 
-  def remap(path:File, cms:ClassMapperSettings) = {
-    val mapping = updateMapping(path, cms)
+  def remap(cms:ClassMapperSettings) = {
+    val mapping = updateMapping(cms)
     //mapping.foreach(println)
     val javaMapping = mapping.mapValues(v=>v: java.lang.Integer).asJava
-    val newConfig = cms.mappingConfig.withOnlyPath(mapperName)
+    val newConfig = cms.mappingConfig.withOnlyPath(cms.configName)
       .withValue(cms.classmappingKey, ConfigValueFactory.fromMap(javaMapping))
     println(newConfig.root().render())
-    replaceConfig(path, cms.configName, newConfig)
+    replaceConfig(cms.dir, cms.configName, newConfig)
   }
 
-
-
-  def findClassNames(path:File):Set[String] = {
-    /*val url = getClass.getResource("/")
-    val root = url.getFile*/
-    findFiles(path, ".class")
-  }
 
   def loaderFor(path:File):URLClassLoader = URLClassLoader.newInstance(Array(path.toURI.toURL))
 
   def findMappableClassNames(path:File, superclazzName:String):Set[String] = {
-    val names = findClassNames(path)
+    val names = findFiles(path, ".class")
     val loader = loaderFor(path)
-    val superclass = loader.loadClass(superclazzName)
-
-    def isRightClass(name: String) = {
-      val clazz = loader.loadClass(name)
-      clazz != superclass && superclass.isAssignableFrom(clazz)
+    val superclass = Try(loader.loadClass(superclazzName))
+    val isRightClass = superclass match {
+      case Success(s) => (clazz:Class[_]) => clazz != s && s.isAssignableFrom(clazz)
+      case _ => (clazz:Class[_]) => clazz.getInterfaces.toList.map(_.getName).contains(superclazzName)
     }
-    names.collect { case name if isRightClass(name) => name}.toSet
+
+    names.map(loader.loadClass(_)).collect { case clazz if isRightClass(clazz) => clazz.getName}.toSet
   }
 
   def findFiles(directory:File, postfix:String):Set[String] = {
@@ -79,7 +76,7 @@ class ClassMapper(mapperName:String) {
       else {
         val (packagePath, dir) = uncheckedDirs.head
         //val currentPackagePath = s"$packagePath${dir.getName}."
-        val (directories, files) =  dir.listFiles.partition(_.isDirectory)
+        val (directories, files) =  Option(dir.listFiles).toList.flatten.partition(_.isDirectory)
         val foundFiles = files.filter(_.getName.endsWith(postfix)).map(file => s"$packagePath${trimPostfix(file.getName, postfix.length)}")
         findFilesRec(uncheckedDirs.tail ++ directories.map(d => (s"$packagePath${d.getName}.", d)), found ++ foundFiles)
       }
