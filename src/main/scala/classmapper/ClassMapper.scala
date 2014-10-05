@@ -4,9 +4,9 @@ import java.io.File
 import java.net.{URL, URLClassLoader, URI}
 import java.nio.file.{Files, Paths}
 import java.text.SimpleDateFormat
-import java.util.Date
+import java.util.{Collections, Date}
 
-import com.typesafe.config.{Config, ConfigFactory, ConfigValueFactory}
+import com.typesafe.config._
 
 import scala.annotation.tailrec
 import scala.collection.JavaConverters._
@@ -16,17 +16,19 @@ object ClassMapperSettings {
   def load(path:String, mapperName:String):ClassMapperSettings = load(new File(path), mapperName)
   def load(directory:File, mapperName:String):ClassMapperSettings = {
     val configName = s"$mapperName.conf"
-    val cfg = ConfigFactory.parseFile(new File(directory, configName))
+    val cfg = ConfigFactory.parseFile(new File(directory, configName)).resolve()
     val superclassKey = s"$mapperName.interface"
     val superclassName = cfg.getString(superclassKey)
     val classmappingKey = s"$mapperName.classmapping"
-    val storedMapping = configToMap(cfg.getConfig(classmappingKey))
+    val mapping = ConfigFactory.parseString(cfg.getList(classmappingKey).get(0).render())
+    val storedMapping = configToMap(mapping)
     ClassMapperSettings(configName, cfg, superclassName, classmappingKey, storedMapping, storedMapping.values.max + 1)
   }
   def configToMap(c:Config) = c.root().unwrapped().asScala.toMap.mapValues(v => v.toString.toInt)
 }
 class ClassMapper(mapperName:String) {
   lazy val settings = ClassMapperSettings.load("", "")
+  val renderOpts = ConfigRenderOptions.defaults().setOriginComments(false)
 
   def updateMapping(path:File, cms:ClassMapperSettings):Map[String, Int] = {
     val actualClassNames = findMappableClassNames(path, cms.superclassName)
@@ -95,6 +97,6 @@ class ClassMapper(mapperName:String) {
     val date = format.format(new Date)
     val pathForOld = Paths.get(new File(path, s"$name$date").toURI)
     Files.copy(pathForNew, pathForOld)
-    Files.write(pathForNew, newConfig.root().render().getBytes)
+    Files.write(pathForNew, newConfig.root().render(renderOpts).replaceFirst(""""classmapping"\s*:""", """"classmapping" += """).getBytes)
   }
 }
