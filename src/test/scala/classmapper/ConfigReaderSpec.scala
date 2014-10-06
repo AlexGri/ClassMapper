@@ -9,8 +9,9 @@ import org.scalatest.{Matchers, WordSpecLike}
  */
 class ConfigReaderSpec extends WordSpecLike with Matchers {
   val mapper = new ClassMapper()
-  val path = new File("/home/alex/IdeaProjects/ClassMapper/unmanaged")
-  val configName = "cm"
+  val path = new File("./unmanaged/").getAbsoluteFile
+  println(path)
+  val configName = "real.conf"
   val d1 = "org.me.Dependent1"
   val d2 = "org.me.Dependent2"
   val i = "org.me.Independent"
@@ -23,20 +24,24 @@ class ConfigReaderSpec extends WordSpecLike with Matchers {
     "be able to load unmanaged classes" in {
       val loader = mapper.loaderFor(path)
       loader shouldNot be(null)
-      val found = mapper.findMappableClassNames(path, t)
+      val found = mapper.findMappableClassNames(path, Some(t))
       found shouldBe Set(d1, d2)
+    }
+    "be able to load unmanaged classes woth no superclass defined" in {
+      val found = mapper.findMappableClassNames(path, None)
+      found shouldBe Set(d1, d2, i, t)
     }
     "correctly load config" in {
       val config = ClassMapperSettings.load(path, configName).get
-      config.configName shouldBe "cm.conf"
-      config.counter shouldBe 3
-      config.superclassName shouldBe t
-      config.storedMapping shouldBe Map(d1 -> 1, "org.Test2" -> 2)
+      config.configName shouldBe "real.conf"
+      config.counter shouldBe 1009
+      config.superclassName shouldBe Some(t)
+      config.storedMapping shouldBe Map(d1 -> 1005, "org.Test2" -> 1008)
     }
     "update mapping" in {
       val config = ClassMapperSettings.load(path, configName).get
       val updated = mapper.updateMapping(config)
-      updated shouldBe Map(d1 -> 1, d2 -> 3)
+      updated shouldBe Map(d1 -> 1005, d2 -> 1009)
     }
     "replace config" in {
       val config = ClassMapperSettings.load(path, configName).get
@@ -46,7 +51,7 @@ class ConfigReaderSpec extends WordSpecLike with Matchers {
 
     "work correctly with incorrect dir" in {
       mapper.findFiles(new File(""), ".class") shouldBe Set.empty
-      mapper.findMappableClassNames(new File(""), "")
+      mapper.findMappableClassNames(new File(""), Some(""))
     }
   }
 }
