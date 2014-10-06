@@ -13,12 +13,12 @@ import scala.collection.JavaConverters._
 import scala.util.{Success, Try}
 
 case class ClassMapperSettings(configName:String, mappingConfig:Config, superclassName:Option[String],
-                               storedMapping:Map[String, Int], counter:Int, dir:File)
+                               storedMapping:Map[String, Int], counter:Int, classesDir:File, mappingFile:File)
 object ClassMapperSettings {
   val superclassKey = "akka.actor.ecoproto.mapping-interface"
   val classmappingKey = "akka.actor.ecoproto.mappings"
-  def load(path:String, mapperName:String):Try[ClassMapperSettings] = load(new File(path), mapperName)
-  def load(cmFile:File):Try[ClassMapperSettings] = {
+  //def load(path:String, mapperName:String):Try[ClassMapperSettings] = load(new File(path), mapperName)
+  def load(cmFile:File, classesDir:File):Try[ClassMapperSettings] = {
     val configName = cmFile.getName//s"$mapperName.conf"
 
     Try {
@@ -27,17 +27,17 @@ object ClassMapperSettings {
       val mapping = ConfigFactory.parseString(cfg.getList(classmappingKey).get(0).render())
       val storedMapping = configToMap(mapping)
       val counter = (0 :: storedMapping.values.toList).max + 1
-      ClassMapperSettings(configName, cfg, superclassName, storedMapping, counter, cmFile.getParentFile)
+      ClassMapperSettings(configName, cfg, superclassName, storedMapping, counter, classesDir, cmFile)
     }
   }
-  def load(directory:File, mapperName:String):Try[ClassMapperSettings] = load(new File(directory, mapperName))
+ // def load(directory:File, mapperName:String):Try[ClassMapperSettings] = load(new File(directory, mapperName))
   def configToMap(c:Config) = c.root().unwrapped().asScala.toMap.mapValues(v => v.toString.toInt)
 }
 class ClassMapper {
   val renderOpts = ConfigRenderOptions.defaults().setOriginComments(false)
 
   def updateMapping(cms:ClassMapperSettings):Map[String, Int] = {
-    val actualClassNames = findMappableClassNames(cms.dir, cms.superclassName)
+    val actualClassNames = findMappableClassNames(cms.classesDir, cms.superclassName)
     val storedClassNames = cms.storedMapping.keySet
     val newClassNames = actualClassNames.diff(storedClassNames)
     val newClassNamesMapping = newClassNames.zipWithIndex.map { case (clazz, index) => (clazz, index + cms.counter)}.toMap
@@ -53,7 +53,7 @@ class ClassMapper {
     val newConfig = cms.mappingConfig//.withOnlyPath(cms.configName)
       .withValue(ClassMapperSettings.classmappingKey, ConfigValueFactory.fromMap(javaMapping))
     println(newConfig.root().render())
-    replaceConfig(cms.dir, cms.configName, newConfig)
+    replaceConfig(cms.mappingFile, newConfig)
   }
 
 
@@ -92,11 +92,11 @@ class ClassMapper {
     findFilesRec(List(("", directory)), Set.empty)
   }
 
-  def replaceConfig(path:File, name:String, newConfig:Config) = {
-    val pathForNew = Paths.get(new File(path, name).toURI)
+  def replaceConfig(path:File, newConfig:Config) = {
+    val pathForNew = Paths.get(path.toURI)
     val format = new SimpleDateFormat("yyyyddMMmmssss")
     val date = format.format(new Date)
-    val pathForOld = Paths.get(new File(path, s"$name$date").toURI)
+    val pathForOld = Paths.get(new File(path.getParent, s"${path.getName}$date").toURI)
     Files.copy(pathForNew, pathForOld)
     Files.write(pathForNew, newConfig.root().render(renderOpts).replaceFirst(""""mappings"\s*:""", """"mappings" += """).getBytes)
   }
