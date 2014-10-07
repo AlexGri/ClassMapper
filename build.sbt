@@ -8,6 +8,8 @@ name := "ClassMapper"
 
 version := "1.0"
 
+organization := "test"
+
 scalaVersion := "2.10.4"
 
 libraryDependencies += "com.typesafe" % "config" % "1.2.1"

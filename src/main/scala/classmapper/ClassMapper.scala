@@ -17,31 +17,42 @@ case class ClassMapperSettings(configName:String, mappingConfig:Config, supercla
 object ClassMapperSettings {
   val superclassKey = "akka.actor.ecoproto.mapping-interface"
   val classmappingKey = "akka.actor.ecoproto.mappings"
-  //def load(path:String, mapperName:String):Try[ClassMapperSettings] = load(new File(path), mapperName)
+  val minCounterValue = 1001
+
   def load(cmFile:File, classesDir:File):Try[ClassMapperSettings] = {
     val configName = cmFile.getName//s"$mapperName.conf"
 
     Try {
       val cfg = ConfigFactory.parseFile(cmFile).resolve()
+      //имя суперкласса опционально, если не указано, то в конфиг будут включены все файлы
       val superclassName = Try(cfg.getString(superclassKey)).toOption
+      //маппинг - это список, но мне удобнее, если бы он был конфигом
       val mapping = ConfigFactory.parseString(cfg.getList(classmappingKey).get(0).render())
       val storedMapping = configToMap(mapping)
-      val counter = (0 :: storedMapping.values.toList).max + 1
+      //добавляем minCounterValue в список, иначе max на пустом списке выбросит исключение
+       val counter = (minCounterValue :: storedMapping.values.toList).max + 1
       ClassMapperSettings(configName, cfg, superclassName, storedMapping, counter, classesDir, cmFile)
     }
   }
- // def load(directory:File, mapperName:String):Try[ClassMapperSettings] = load(new File(directory, mapperName))
+
   def configToMap(c:Config) = c.root().unwrapped().asScala.toMap.mapValues(v => v.toString.toInt)
 }
 class ClassMapper {
   val renderOpts = ConfigRenderOptions.defaults().setOriginComments(false)
 
   def updateMapping(cms:ClassMapperSettings):Map[String, Int] = {
+    //находим класс-файлы для маппинга
     val actualClassNames = findMappableClassNames(cms.classesDir, cms.superclassName)
     val storedClassNames = cms.storedMapping.keySet
+
+    //новые=найденные - те что есть
     val newClassNames = actualClassNames.diff(storedClassNames)
+
+    //назначаем им айдишники
     val newClassNamesMapping = newClassNames.zipWithIndex.map { case (clazz, index) => (clazz, index + cms.counter)}.toMap
     val removedClassNames = storedClassNames.diff(actualClassNames)
+
+    //оставшиеся = те что есть - удаленные
     val oldMapping = cms.storedMapping -- removedClassNames
     oldMapping ++ newClassNamesMapping
   }
@@ -61,12 +72,14 @@ class ClassMapper {
 
   def findMappableClassNames(path:File, superclassName:Option[String]):Set[String] = {
     val names = findFiles(path, ".class")
+    //если нужно проверять, что классы унаследованы
     superclassName.map {superclazzName =>
       val loader = loaderFor(path)
+      //пытаемся загрузить суперкласс
       val superclass = Try(loader.loadClass(superclazzName))
       val isRightClass = superclass match {
-        case Success(s) => (clazz: Class[_]) => clazz != s && s.isAssignableFrom(clazz)
-        case _ => (clazz: Class[_]) => clazz.getInterfaces.toList.map(_.getName).contains(superclazzName)
+        case Success(s) => (clazz: Class[_]) => clazz != s && s.isAssignableFrom(clazz)//суперкласс находится в класспафе, проверяем рефлекшном
+        case _ => (clazz: Class[_]) => clazz.getInterfaces.toList.map(_.getName).contains(superclazzName)//проверяем только по имени
       }
 
       names.map(loader.loadClass(_)).collect { case clazz if isRightClass(clazz) => clazz.getName}.toSet
@@ -98,6 +111,7 @@ class ClassMapper {
     val date = format.format(new Date)
     val pathForOld = Paths.get(new File(path.getParent, s"${path.getName}$date").toURI)
     Files.copy(pathForNew, pathForOld)
+    //нехороший хак, не нашел способ сохранять массив с указанием, что он может быть смерджен в другом конфиге.
     Files.write(pathForNew, newConfig.root().render(renderOpts).replaceFirst(""""mappings"\s*:""", """"mappings" += """).getBytes)
   }
 }
